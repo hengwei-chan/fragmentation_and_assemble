@@ -1,3 +1,4 @@
+import itertools
 from typing import Union
 from typing import List
 from typing import Tuple
@@ -673,78 +674,6 @@ def copy_mol_props(source: Chem.rdchem.Mol, destination: Chem.rdchem.Mol):
     dm.set_mol_props(destination, props)
 
 
-def enumerate_tautomers(mol: Chem.rdchem.Mol, n_variants: int = 20):
-    """Enumerate the possible tautomers of the current molecule.
-
-    Original source: the `openff-toolkit` lib.
-
-    Args:
-        mol: The molecule whose state we should enumerate.
-        n_variants: The maximum amount of molecules that should be returned.
-    """
-    # safety first
-    mol = copy_mol(mol)
-
-    enumerator = rdMolStandardize.TautomerEnumerator()
-    enumerator.SetMaxTautomers(n_variants)
-    tautomers = enumerator.Enumerate(mol)
-    return list(tautomers)
-
-
-def enumerate_stereoisomers(
-    mol,
-    n_variants: int = 20,
-    undefined_only: bool = False,
-    rationalise: bool = True,
-):
-    """Enumerate the stereocenters and bonds of the current molecule.
-
-    Original source: the `openff-toolkit` lib.
-
-    Warning: this function can be computationnaly intensive.
-
-    Args:
-        mol: The molecule whose state we should enumerate.
-        n_variants: The maximum amount of molecules that should be returned.
-        undefined_only: If we should enumerate all stereocenters and bonds or only those
-            with undefined stereochemistry.
-        rationalise: If we should try to build and rationalise the molecule to ensure it
-            can exist.
-    """
-    from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers
-    from rdkit.Chem.EnumerateStereoisomers import StereoEnumerationOptions
-
-    # safety first
-    mol = copy_mol(mol)
-
-    # in case any bonds/centers are missing stereo chem flag it here
-    Chem.AssignStereochemistry(mol, force=False, flagPossibleStereoCenters=True, cleanIt=True)  # type: ignore
-    Chem.FindPotentialStereoBonds(mol, cleanIt=True)  # type: ignore
-
-    # set up the options
-    stereo_opts = StereoEnumerationOptions(
-        tryEmbedding=rationalise,
-        onlyUnassigned=undefined_only,
-        maxIsomers=n_variants,
-    )
-
-    try:
-        isomers = tuple(EnumerateStereoisomers(mol, options=stereo_opts))
-    except:
-        # NOTE(hadim): often got "Stereo atoms should be specified before specifying CIS/TRANS bond stereochemistry"
-        # for the ligand of reference (coming from the PDB). Not sure how to handle that.
-        isomers = []
-
-    variants = []
-    for isomer in isomers:
-        # isomer has CIS/TRANS tags so convert back to E/Z
-        Chem.SetDoubleBondNeighborDirections(isomer)  # type: ignore
-        Chem.AssignStereochemistry(isomer, force=True, cleanIt=True)  # type: ignore
-        variants.append(isomer)
-
-    return variants
-
-
 def atom_indices_to_mol(mol: Chem.rdchem.Mol, copy: bool = False):
     """Add the `molAtomMapNumber` property to each atoms.
 
@@ -759,3 +688,39 @@ def atom_indices_to_mol(mol: Chem.rdchem.Mol, copy: bool = False):
     for atom in mol.GetAtoms():
         atom.SetProp("molAtomMapNumber", str(atom.GetIdx()))
     return mol
+
+
+def protect_atoms(
+    mol: Chem.rdchem.Mol,
+    substruct: Optional[Chem.rdchem.Mol] = None,
+    atoms: List[int] = None,
+    in_place: bool = False,
+) -> Chem.rdchem.Mol:
+    """Protect a list of atoms or substruct in a molecule.
+    The _protected attributes of a molecule is used by RDKit in several functions, especially for reactions
+    where "protected" atoms are disallowed from taking part in reactions.
+
+    Args:
+        mol: input molecule to protect
+        substruct: optional substructure query to identify atoms to protect
+        atoms: optional list of atom indices to protect
+        in_place: whether to perform the protection in place or return a copy of the molecule
+    """
+    if not isinstance(atoms, (tuple, list)):
+        atoms = [atoms]
+
+    # do not perform protection in place
+    if in_place:
+        mol_copy = mol
+    else:
+        mol_copy = copy_mol(mol)
+
+    if substruct is not None:
+        matches = mol_copy.GetSubstructMatches(substruct)
+        atoms.extend(itertools.chain(*matches))
+
+    for a in atoms:
+        if a is None:
+            continue
+        mol_copy.GetAtomWithIdx(a).SetProp("_protected", "1")
+    return mol_copy

@@ -1,5 +1,5 @@
 import pytest
-
+import itertools
 from rdkit import Chem
 
 import datamol as dm
@@ -239,27 +239,6 @@ def test_copy_mol_props():
     assert destination.GetPropsAsDict() == source.GetPropsAsDict()
 
 
-def test_enumerate_tautomers():
-    mol = dm.to_mol("OC1=CC2CCCCC2[N:1]=C1")
-
-    mols = dm.enumerate_tautomers(mol, n_variants=10)
-
-    assert {dm.to_smiles(m) for m in mols} == {"O=C1C=[N:1]C2CCCCC2C1", "OC1=CC2CCCCC2[N:1]=C1"}
-
-
-def test_enumerate_stereo():
-    mol = dm.to_mol("OC1=CC2CCCCC2[N:1]=C1")
-
-    mols = dm.enumerate_stereoisomers(mol, n_variants=10)
-
-    assert {dm.to_smiles(m) for m in mols} == {
-        "OC1=C[C@@H]2CCCC[C@@H]2[N:1]=C1",
-        "OC1=C[C@@H]2CCCC[C@H]2[N:1]=C1",
-        "OC1=C[C@H]2CCCC[C@@H]2[N:1]=C1",
-        "OC1=C[C@H]2CCCC[C@H]2[N:1]=C1",
-    }
-
-
 def test_atom_indices_to_mol():
     mol: dm.Mol = dm.to_mol("OC1=CC2CCCCC2[N:1]=C1")
 
@@ -420,3 +399,22 @@ def test_same_mol():
     assert dm.same_mol(None, mol2) is False
     assert dm.same_mol(mol1, None) is False
     assert dm.same_mol(None, None) is False
+
+
+def test_protect_atoms():
+    mol = dm.to_mol("CC(=O)Oc1cnccc1C(O)=O")
+    # carbonyl group
+    query = dm.from_smarts("[$([CX3]=[OX1]),$([CX3+]-[OX1-])]")
+    # find id of single nitrogen
+    atom_ids = [at.GetIdx() for at in mol.GetAtoms() if at.GetSymbol() == "N"]
+    protected_atoms = itertools.chain(*mol.GetSubstructMatches(query))
+    protected_atoms = set(list(protected_atoms) + atom_ids)
+    new_mol = dm.protect_atoms(mol, substruct=query, atoms=atom_ids)
+    computed_protect_atoms = set(
+        [
+            at.GetIdx()
+            for at in new_mol.GetAtoms()
+            if int(at.GetPropsAsDict().get("_protected", 0)) == 1
+        ]
+    )
+    assert protected_atoms == computed_protect_atoms
